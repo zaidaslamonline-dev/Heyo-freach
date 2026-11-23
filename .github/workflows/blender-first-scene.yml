@@ -1,0 +1,58 @@
+name: Render Blender first-scene prototype
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/blender-first-scene]
+    paths:
+      - "scripts/blender/**"
+      - ".github/workflows/blender-first-scene.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Blender and FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y blender ffmpeg
+          blender --version
+          ffmpeg -version | head -n 2
+
+      - name: Render scene
+        env:
+          OUTPUT_DIR: render
+        run: |
+          mkdir -p render
+          blender --background --threads 2 --python scripts/blender/first_scene.py
+
+      - name: Assemble vertical MP4
+        run: |
+          ffmpeg -y -framerate 12 -i render/frame_%04d.png \
+            -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p \
+            -movflags +faststart render/first_scene.mp4
+          ffprobe -v error -show_entries format=duration,size \
+            -show_entries stream=codec_name,width,height,r_frame_rate \
+            -of json render/first_scene.mp4
+
+      - name: Upload preview and project
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-first-scene-preview
+          path: |
+            render/first_scene.mp4
+            render/first_scene.blend
+            render/frame_0001.png
+            render/frame_0012.png
+            render/frame_0024.png
+            render/frame_0036.png
+            render/frame_0048.png
+          if-no-files-found: error
+          retention-days: 14
