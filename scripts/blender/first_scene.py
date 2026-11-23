@@ -148,8 +148,9 @@ cam.location.x=.35; cam.keyframe_insert(data_path="location",frame=48)
 for ob in [o for o in scene.objects if o.name.startswith("Soft cloud")]:
     ob.keyframe_insert(data_path="location",frame=1); ob.location.y+=.4; ob.keyframe_insert(data_path="location",frame=48)
 
-scene.render.engine="BLENDER_EEVEE_NEXT"
-scene.eevee.taa_render_samples=32
+scene.render.engine = "BLENDER_EEVEE_NEXT" if bpy.app.version >= (4, 2, 0) else "BLENDER_EEVEE"
+if hasattr(scene, "eevee"):
+    scene.eevee.taa_render_samples = 32
 scene.render.resolution_x=576; scene.render.resolution_y=1024; scene.render.resolution_percentage=100
 scene.render.fps=12; scene.frame_start=1; scene.frame_end=48
 scene.render.image_settings.file_format="PNG"; scene.render.image_settings.color_mode="RGBA"
