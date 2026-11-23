@@ -1,0 +1,102 @@
+name: Extract audio from Video 1
+
+on:
+  push:
+    branches:
+      - feat/video-1-audio-extraction
+    paths:
+      - "assets/video_1_subtitles.srt"
+      - "*.mp4"
+      - ".github/workflows/extract-video-audio.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: video-1-audio-extraction
+  cancel-in-progress: false
+
+jobs:
+  extract-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out workstation
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Locate source video and inspect streams
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t videos < <(find . -maxdepth 1 -type f -iname '*.mp4' -print)
+          if [ "${#videos[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one MP4 in the repository root; found ${#videos[@]}."
+            printf '%s\n' "${videos[@]}"
+            exit 1
+          fi
+          video="${videos[0]}"
+          echo "video=$video" >> "$GITHUB_OUTPUT"
+          ffprobe -v error -show_entries format=duration:stream=index,codec_type,codec_name,sample_rate,channels,width,height -of json "$video" | tee source_probe.json
+          if ! ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$video" | grep -q .; then
+            echo "::error::The source MP4 has no audio stream to extract."
+            exit 1
+          fi
+
+      - name: Validate supplied Hindi subtitles
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("assets/video_1_subtitles.srt")
+          if not p.is_file():
+              raise SystemExit("Missing assets/video_1_subtitles.srt")
+          raw = p.read_text(encoding="utf-8-sig").strip()
+          blocks = [b for b in re.split(r"\n\s*\n", raw) if b.strip()]
+          if len(blocks) != 62:
+              raise SystemExit(f"Expected 62 subtitle cues; found {len(blocks)}")
+          for i, block in enumerate(blocks, 1):
+              lines = block.splitlines()
+              if len(lines) < 3 or lines[0].strip() != str(i):
+                  raise SystemExit(f"Malformed subtitle cue {i}")
+              if not re.fullmatch(r"\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}", lines[1].strip()):
+                  raise SystemExit(f"Invalid timestamp in cue {i}: {lines[1] if len(lines)>1 else '(missing)'}")
+          print(f"Validated {len(blocks)} Hindi subtitle cues.")
+          PY
+
+      - name: Extract original audio to WAV and MP3
+        env:
+          INPUT_VIDEO: ${{ steps.source.outputs.video }}
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          ffmpeg -hide_banner -y -i "$INPUT_VIDEO" -map 0:a:0 -vn -c:a pcm_s16le -ar 48000 -ac 2 output/video_1_audio.wav
+          ffmpeg -hide_banner -y -i "$INPUT_VIDEO" -map 0:a:0 -vn -c:a libmp3lame -b:a 192k -ar 48000 -ac 2 output/video_1_audio.mp3
+          ffprobe -v error -show_entries format=duration:stream=codec_name,sample_rate,channels -of json output/video_1_audio.wav | tee output/audio_probe.json
+          ffmpeg -v error -i output/video_1_audio.wav -f null -
+
+      - name: Package extraction and subtitle files
+        run: |
+          cp assets/video_1_subtitles.srt output/
+          cp source_probe.json output/
+          cat > output/README.txt <<'EOF'
+          Video 1 audio extraction
+          - video_1_audio.wav: 48 kHz, 16-bit PCM, stereo
+          - video_1_audio.mp3: 192 kbps MP3, 48 kHz, stereo
+          - video_1_subtitles.srt: user-supplied Hindi subtitles (62 cues)
+          Source video remains unchanged in the repository.
+          EOF
+
+      - name: Upload extracted audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-1-audio-and-subtitles
+          path: output/
+          if-no-files-found: error
+          retention-days: 14
